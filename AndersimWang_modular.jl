@@ -436,7 +436,7 @@ function apply_initial_conditions!(vars::SimulationVariables, params::InputParam
     vars.uL0[:] .= params.uL_inlet
     vars.uG0[:] .= params.uG_inlet
     vars.αL0[:] .= vars.αL_inlet
-    vars.αG0[:] .= params.αG_0
+    vars.αG0[:] .= params.αG_inlet
     vars.ρL0[:] .= params.ρLi
     vars.ρG0[:] .= params.ρGi
     vars.P0[:] .= params.P_out
@@ -779,7 +779,7 @@ Interpola frações volumétricas αL/αG para a malha de velocidades - EXATAMEN
 """
 function interpolate_alpha_to_velocity_mesh!(vars::SimulationVariables, pontos::Vector{Float64})
     N = vars.N
-    Grau = length(pontos)
+    Grau = length(pontos) - 1  # pontos tem tamanho Grau+1, então Grau = length(pontos) - 1
     
     # Condições de contorno conforme código original
     vars.αLu[1, :] .= vars.αL[1]
@@ -794,7 +794,7 @@ function interpolate_alpha_to_velocity_mesh!(vars::SimulationVariables, pontos::
     
     # Interpolação nas faces internas - EXATAMENTE como no código original
     for i = 2:N+1
-        for j = 1:Grau
+        for j = 1:Grau+1
             β1 = pontos[j] + 1
             β2 = pontos[j] - 1
             lj1 = lagrangeBasisAt(β1, pontos)
@@ -817,11 +817,11 @@ Interpola velocidades uL/uG para a malha de frações volumétricas - EXATAMENTE
 """
 function interpolate_velocity_to_alpha_mesh!(vars::SimulationVariables, flows::FlowStructures, pontos::Vector{Float64})
     N = vars.N
-    Grau = length(pontos)
+    Grau = length(pontos) - 1  # pontos tem tamanho Grau+1, então Grau = length(pontos) - 1
     
     # Interpolação conforme código original (linhas 664-675)
     for i = 1:N+2
-        for j = 1:Grau
+        for j = 1:Grau+1
             β1 = pontos[j] + 1
             β2 = pontos[j] - 1
             lj1 = lagrangeBasisAt(β1, pontos)
@@ -843,12 +843,10 @@ end
 Resolve a equação de energia usando esquema MUSCL
 """
 function solve_energy_equation!(vars::SimulationVariables, params::InputParameters)
-    # Proteção para evitar valores físicamente impossíveis
-    vars.αG[:] = clamp.(vars.αG[:], 0.001, 0.999)
-    vars.αL[:] = 1.0 .- vars.αG[:]
-    
     # Calcula coeficientes de transferência de calor (conforme código original)
-    vars.U_conv[:] .= vars.ULM[:] .* (1 ./ (1 .- vars.αG[:])) .^ 0.9
+    # Proteção apenas para esta operação específica para evitar números negativos na exponenciação
+    αG_safe = clamp.(vars.αG[:], 0.001, 0.999)
+    vars.U_conv[:] .= vars.ULM[:] .* (1 ./ (1 .- αG_safe)) .^ 0.9
     vars.R_tot[:] .= (1 ./ (vars.U_conv[:] .* params.D * π .* vars.Δx)) .+
                      log(params.D_ext / params.D) ./ (2 * π * params.kf_pipe * vars.Δx) .+ 
                      (1 ./ (params.h_ext .* (vars.Δx .* π .* params.D_ext)))
@@ -946,7 +944,7 @@ Resolve as equações de velocidade usando MUSCL ou FR
 """
 function solve_velocity_equations!(vars::SimulationVariables, params::InputParameters, flows::FlowStructures, weights::Vector{Float64})
     if params.metodo == 1  # MUSCL
-        println("Resolvendo velocidades com MUSCL")
+        # println("Resolvendo velocidades com MUSCL")  # DEBUG removido
         
         # Chamadas MUSCL para as velocidades conforme código original
         (vars.uLδD[:, :]) = MUSCL(flows.uLflow, vars.uLδD0, vars.αLf, vars.ρLf, vars.αLf0, vars.ρLf0, vars.uL, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_L, vars.uLC0, vars.αL, vars.ρL, vars.uL0, vars.τi, vars.τw, vars.αGf0, params.D)
@@ -954,7 +952,7 @@ function solve_velocity_equations!(vars::SimulationVariables, params::InputParam
         (vars.uGδD[:, :]) = MUSCL(flows.uGflow, vars.uGδD0, vars.αGf, vars.ρGf, vars.αGf0, vars.ρGf0, vars.uG, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_G, vars.uGC0, vars.αG, vars.ρG, vars.uG0, vars.τi, vars.τw, vars.αGf0, params.D)
         
     else  # FR
-        println("Resolvendo velocidades com FR")
+        # println("Resolvendo velocidades com FR")  # DEBUG removido
         (vars.uLδD[:, :]) = FR(flows.uLflow, vars.uLδD0, vars.αLf, vars.ρLf, vars.αLf0, vars.ρLf0, vars.uL, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_L, vars.uLC0, vars.αL, vars.ρL, vars.uL0, vars.τi, vars.τw, vars.αGf0, params.D)
         
         (vars.uGδD[:, :]) = FR(flows.uGflow, vars.uGδD0, vars.αGf, vars.ρGf, vars.αGf0, vars.ρGf0, vars.uG, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_G, vars.uGC0, vars.αG, vars.ρG, vars.uG0, vars.τi, vars.τw, vars.αGf0, params.D)
@@ -1070,10 +1068,6 @@ function solve_volume_fraction_equations!(vars::SimulationVariables, params::Inp
         vars.αL[i] = sum(vars.αLδD[i+1, :] .* weights[:]) / 2
         vars.αG[i] = sum(vars.αGδD[i+1, :] .* weights[:]) / 2
     end
-    
-    # Proteção para manter frações volumétricas em limites físicos
-    vars.αG[:] = clamp.(vars.αG[:], 0.001, 0.999)
-    vars.αL[:] = 1.0 .- vars.αG[:]
 end
 
 """
@@ -1267,7 +1261,7 @@ function main()
         
         # Loop de convergência - EXATAMENTE como no original com proteção contra loop infinito
         while (e_uL > params.Tol_u || e_uG > params.Tol_u || e_αL > params.Tol_α || 
-               e_αG > params.Tol_α || e_P > params.Tol_P) && cont1 < 100  # Reduzido para 100 iterações
+               e_αG > params.Tol_α || e_P > params.Tol_P) && cont1 < 1000
                
             cont1 += 1
             
