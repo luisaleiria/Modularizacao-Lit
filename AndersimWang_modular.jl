@@ -561,6 +561,18 @@ function calculate_centered_velocities!(vars::SimulationVariables)
 end
 
 """
+Calcula coeficientes de transferência de calor - EXATAMENTE como no código original
+"""
+function calculate_heat_transfer_coefficients!(vars::SimulationVariables, params::InputParameters)
+    # Proteção apenas para esta operação específica para evitar números negativos na exponenciação
+    αG_safe = clamp.(vars.αG[:], 0.001, 0.999)
+    vars.U_conv[:] .= vars.ULM[:] .* (1 ./ (1 .- αG_safe)) .^ 0.9
+    vars.R_tot[:] .= (1 ./ (vars.U_conv[:] .* params.D * π .* vars.Δx)) .+
+                     log(params.D_ext / params.D) ./ (2 * π * params.kf_pipe * vars.Δx) .+ 
+                     (1 ./ (params.h_ext .* (vars.Δx .* π .* params.D_ext)))
+end
+
+"""
 Calcula números de Reynolds e fatores de atrito
 """
 function calculate_reynolds_and_friction!(vars::SimulationVariables, params::InputParameters)
@@ -1291,7 +1303,8 @@ function main()
             # Interpolação de αL/αG para malha de velocidades - EXATAMENTE como no original
             interpolate_alpha_to_velocity_mesh!(vars, pontos)
             
-
+            # Calcular coeficientes de transferência de calor
+            calculate_heat_transfer_coefficients!(vars, params)
             
             # Calcular números de Reynolds e fatores de atrito
             calculate_reynolds_and_friction!(vars, params)
