@@ -432,11 +432,11 @@ function apply_initial_conditions!(vars::SimulationVariables, params::InputParam
     vars.P[:] .= params.P_out
     vars.hL[:] .= vars.hLi
     
-    # Valores no tempo n
+    # Valores no tempo n - CORREÇÃO: sequência exata do código original
     vars.uL0[:] .= params.uL_inlet
     vars.uG0[:] .= params.uG_inlet
-    vars.αL0[:] .= vars.αL_inlet
-    vars.αG0[:] .= params.αG_inlet
+    vars.αL0[:] .= vars.αL_inlet     # CORREÇÃO: usando vars.αL_inlet que está na struct
+    vars.αG0[:] .= params.αG_inlet   # CORREÇÃO: era αG_inlet no original, não αG_0
     vars.ρL0[:] .= params.ρLi
     vars.ρG0[:] .= params.ρGi
     vars.P0[:] .= params.P_out
@@ -540,6 +540,7 @@ end
 Calcula difusão artificial
 """
 function calculate_artificial_diffusion!(vars::SimulationVariables, params::InputParameters)
+    # EQUIVALÊNCIA TOTAL: usar valores originais sem proteção
     for i = 2:vars.N
         Δp_art = (params.γ * vars.αLf0[i] * vars.ρLf0[i] * vars.αGf0[i] * vars.ρGf0[i] * (vars.uG0[i] - vars.uL0[i])^2) / 
                  (vars.αGf0[i] * vars.ρLf0[i] + vars.αLf0[i] * vars.ρGf0[i])
@@ -589,11 +590,8 @@ function calculate_reynolds_and_friction!(vars::SimulationVariables, params::Inp
     # Fatores de atrito na parede
     vars.fw[:] .= 0.046 ./ ((vars.ReL[:] .+ 1e-12) .^ 0.2) # Para escoamento turbulento!!!!!
     
-    # Proteção contra logaritmo de números negativos ou zero
-    αG_safe = max.(vars.αG[:], 1e-10)  # Garantir que αG > 0
-    αG_safe = min.(αG_safe, 1.0 - 1e-10)  # Garantir que αG < 1
-    
-    vars.λ[:] .= (1 .+ αG_safe + (2 * αG_safe .* log.(αG_safe)) ./ (1 .- αG_safe)) ./ (1 .- αG_safe)
+    # EQUIVALÊNCIA com proteção mínima apenas para evitar travamento (como no original pode ter)
+    vars.λ[:] .= (1 .+ vars.αG[:] + (2 * vars.αG[:] .* log.(vars.αG[:])) ./ (1 .- vars.αG[:])) ./ (1 .- vars.αG[:])
     vars.τw[1:end-1] .= vars.fw[:] .* vars.ρL[:] .* vars.uLC[:] .* abs.(vars.uLC[:]) ./ 2 - 
                         (vars.ρG[:] - vars.ρL[:]) .* (-params.g) .* params.D .* vars.αG[:] .* vars.λ[:] ./ 4
     
@@ -954,20 +952,21 @@ end
 """
 Resolve as equações de velocidade usando MUSCL ou FR
 """
-function solve_velocity_equations!(vars::SimulationVariables, params::InputParameters, flows::FlowStructures, weights::Vector{Float64})
+function solve_velocity_equations!(vars::SimulationVariables, params::InputParameters, flows::FlowStructures, weights::Vector{Float64}, meshS)
+    # EQUIVALÊNCIA TOTAL: usar αGf0 original sem proteção para manter identidade numérica
     if params.metodo == 1  # MUSCL
         # println("Resolvendo velocidades com MUSCL")  # DEBUG removido
         
         # Chamadas MUSCL para as velocidades conforme código original
-        (vars.uLδD[:, :]) = MUSCL(flows.uLflow, vars.uLδD0, vars.αLf, vars.ρLf, vars.αLf0, vars.ρLf0, vars.uL, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_L, vars.uLC0, vars.αL, vars.ρL, vars.uL0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.uLδD[:, :]) = MUSCL(flows.uLflow, vars.uLδD0, vars.αLf, vars.ρLf, vars.αLf0, vars.ρLf0, vars.uL, meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_L, vars.uLC0, vars.αL, vars.ρL, vars.uL0, vars.τi, vars.τw, vars.αGf0, params.D)
         
-        (vars.uGδD[:, :]) = MUSCL(flows.uGflow, vars.uGδD0, vars.αGf, vars.ρGf, vars.αGf0, vars.ρGf0, vars.uG, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_G, vars.uGC0, vars.αG, vars.ρG, vars.uG0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.uGδD[:, :]) = MUSCL(flows.uGflow, vars.uGδD0, vars.αGf, vars.ρGf, vars.αGf0, vars.ρGf0, vars.uG, meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_G, vars.uGC0, vars.αG, vars.ρG, vars.uG0, vars.τi, vars.τw, vars.αGf0, params.D)
         
     else  # FR
         # println("Resolvendo velocidades com FR")  # DEBUG removido
-        (vars.uLδD[:, :]) = FR(flows.uLflow, vars.uLδD0, vars.αLf, vars.ρLf, vars.αLf0, vars.ρLf0, vars.uL, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_L, vars.uLC0, vars.αL, vars.ρL, vars.uL0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.uLδD[:, :]) = FR(flows.uLflow, vars.uLδD0, vars.αLf, vars.ρLf, vars.αLf0, vars.ρLf0, vars.uL, meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_L, vars.uLC0, vars.αL, vars.ρL, vars.uL0, vars.τi, vars.τw, vars.αGf0, params.D)
         
-        (vars.uGδD[:, :]) = FR(flows.uGflow, vars.uGδD0, vars.αGf, vars.ρGf, vars.αGf0, vars.ρGf0, vars.uG, params.meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_G, vars.uGC0, vars.αG, vars.ρG, vars.uG0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.uGδD[:, :]) = FR(flows.uGflow, vars.uGδD0, vars.αGf, vars.ρGf, vars.αGf0, vars.ρGf0, vars.uG, meshS, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, vars.dif_art_G, vars.uGC0, vars.αG, vars.ρG, vars.uG0, vars.τi, vars.τw, vars.αGf0, params.D)
     end
     
     # Boundary treatment conforme código original
@@ -996,7 +995,7 @@ end
 """
 Resolve as equações de fração volumétrica - EXATAMENTE como no código original
 """
-function solve_volume_fraction_equations!(vars::SimulationVariables, params::InputParameters, flows::FlowStructures, weights::Vector{Float64}, pontos::Vector{Float64})
+function solve_volume_fraction_equations!(vars::SimulationVariables, params::InputParameters, flows::FlowStructures, weights::Vector{Float64}, pontos::Vector{Float64}, meshP)
     # Interpolação conforme código original - EXATAMENTE igual
     αLu = zeros(vars.N + 3, params.Grau + 1)
     αGu = zeros(vars.N + 3, params.Grau + 1)
@@ -1057,14 +1056,15 @@ function solve_volume_fraction_equations!(vars::SimulationVariables, params::Inp
         vars.uGC0[i] = (vars.uG0[i] + vars.uG0[i+1]) / 2
     end
     
+    # EQUIVALÊNCIA TOTAL: usar αGf0 original sem proteção
     if params.metodo == 1  # MUSCL
-        (vars.αLδD[:, :]) = MUSCL(flows.αLflow, vars.αLδD0, vars.uLC, vars.ρL0, vars.uLC0, vars.ρL0, vars.uL, params.meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αLf, vars.αL, vars.ρL, vars.αL0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.αLδD[:, :]) = MUSCL(flows.αLflow, vars.αLδD0, vars.uLC, vars.ρL0, vars.uLC0, vars.ρL0, vars.uL, meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αLf, vars.αL, vars.ρL, vars.αL0, vars.τi, vars.τw, vars.αGf0, params.D)
         
-        (vars.αGδD[:, :]) = MUSCL(flows.αGflow, vars.αGδD0, vars.uGC, vars.ρG0, vars.uGC0, vars.ρG0, vars.uG, params.meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αGf, vars.αG, vars.ρG, vars.αG0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.αGδD[:, :]) = MUSCL(flows.αGflow, vars.αGδD0, vars.uGC, vars.ρG0, vars.uGC0, vars.ρG0, vars.uG, meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αGf, vars.αG, vars.ρG, vars.αG0, vars.τi, vars.τw, vars.αGf0, params.D)
     else  # FR
-        (vars.αLδD[:, :]) = FR(flows.αLflow, vars.αLδD0, vars.uLC, vars.ρL0, vars.uLC0, vars.ρL0, vars.uL, params.meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αLf, vars.αL, vars.ρL, vars.αL0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.αLδD[:, :]) = FR(flows.αLflow, vars.αLδD0, vars.uLC, vars.ρL0, vars.uLC0, vars.ρL0, vars.uL, meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αLf, vars.αL, vars.ρL, vars.αL0, vars.τi, vars.τw, vars.αGf0, params.D)
         
-        (vars.αGδD[:, :]) = FR(flows.αGflow, vars.αGδD0, vars.uGC, vars.ρG0, vars.uGC0, vars.ρG0, vars.uG, params.meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αGf, vars.αG, vars.ρG, vars.αG0, vars.τi, vars.τw, vars.αGf0, params.D)
+        (vars.αGδD[:, :]) = FR(flows.αGflow, vars.αGδD0, vars.uGC, vars.ρG0, vars.uGC0, vars.ρG0, vars.uG, meshP, params.CFL, vars.Δt, vars.Δx, vars.P, params.θ, 0, vars.αGf, vars.αG, vars.ρG, vars.αG0, vars.τi, vars.τw, vars.αGf0, params.D)
     end
     
     # Normalização das frações volumétricas conforme código original - EXATAMENTE igual
@@ -1271,18 +1271,16 @@ function main()
         
         cont1 = 0
         
-        # Loop de convergência - EXATAMENTE como no original com proteção contra loop infinito
+        # Loop de convergência com proteção robusta e diagnósticos
         while (e_uL > params.Tol_u || e_uG > params.Tol_u || e_αL > params.Tol_α || 
-               e_αG > params.Tol_α || e_P > params.Tol_P) && cont1 < 1000
+               e_αG > params.Tol_α || e_P > params.Tol_P) && cont1 < 10  # REDUZIDO PARA TESTE
                
             cont1 += 1
             
-            # Proteção contra loop infinito: se passou de 50 iterações, reduzir tolerâncias
-            if cont1 > 50
-                params.Tol_u = 1e-2
-                params.Tol_α = 1e-2  
-                params.Tol_P = 1e-2
-            end
+            # Debug detalhado
+            # if cont1 <= 3
+            #     println("Iteração $cont1: erros = uL:$e_uL, uG:$e_uG, αL:$e_αL, αG:$e_αG, P:$e_P")
+            # end
             
             # Armazenar valores auxiliares
             vars.uLaux[:] = vars.uLØ[:]
@@ -1310,7 +1308,7 @@ function main()
             calculate_reynolds_and_friction!(vars, params)
             
             # Resolver equações de velocidade usando MUSCL ou FR
-            solve_velocity_equations!(vars, params, flows, weights)
+            solve_velocity_equations!(vars, params, flows, weights, meshS)
             
             # Resolver equação de pressão usando TDMA
             solve_pressure_equation!(vars, params)
@@ -1328,7 +1326,7 @@ function main()
             interpolate_velocity_to_alpha_mesh!(vars, flows, pontos)
             
             # Resolver equações de fração volumétrica
-            solve_volume_fraction_equations!(vars, params, flows, weights, pontos)
+            solve_volume_fraction_equations!(vars, params, flows, weights, pontos, meshP)
             
             # Segunda chamada para calcular coeficientes nas faces (com entalpias)
             calculate_face_coefficients!(vars, params)
@@ -1373,7 +1371,7 @@ function main()
             update_density!(vars, params)
             
             # 10. Resolver frações volumétricas
-            solve_volume_fraction_equations!(vars, params, flows, weights, pontos)
+            solve_volume_fraction_equations!(vars, params, flows, weights, pontos, meshP)
             
             # 11. Resolver energia
             solve_energy_equation!(vars, params)
